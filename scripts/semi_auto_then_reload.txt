@@ -1,0 +1,9 @@
+// Script untuk EX Xuanwu (dan raid serupa):
+// 1. Klik tombol Semi Auto
+// 2. Langsung Reload halaman
+// 3. Tunggu hasil raid tanpa batas waktu (loop tiap 3 menit reload safety)
+// 4. Setelah raid selesai, otomatis loop ke raid berikutnya
+
+Turn 1:
+	enableSemiAutoAndReload
+end

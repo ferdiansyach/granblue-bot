@@ -1,0 +1,65 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE / Editor
+.idea/
+.vs/
+.vscode/
+*.code-workspace
+
+# Logs
+logs/
+*.log
+
+# Temp / debug files
+temp/
+scratch/
+*.tmp
+temp_*.png
+*_debug_*.png
+bottom_half.png
+top_left_area.png
+point_*.png
+home_header_inspect.png
+play_again_actual_*.png
+party_selection_debug_*.png
+
+# Compiled executable (build artifact)
+*.exe
+
+# Python packaging
+*.egg-info/
+dist/
+build/
+
+# Test/coverage
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Environment secrets
+.env
+backend/settings.json
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Scratch scripts (local experiments)
+scratch_*.py
+test_*.py
+find_*.py
+
+# Backend specific
+backend/__pycache__/
+backend/.venv/
+backend/temp/
+backend/scratch/
