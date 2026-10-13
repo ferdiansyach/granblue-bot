@@ -1,7 +1,239 @@
 # 🤖 Granblue Automation — v3.1.1
 
-> Bot otomasi berbasis Python untuk game **Granblue Fantasy** (browser).  
-> Menggunakan computer vision (OpenCV + EasyOCR) dan kontrol mouse/keyboard otomatis.
+> A Python-based automation bot for **Granblue Fantasy** (browser).  
+> Uses computer vision (OpenCV + EasyOCR) and automated mouse/keyboard control.
+
+---
+
+## ⚠️ Terms of Use
+
+**Read and understand the following before using this project:**
+
+1. **Personal & educational use only.**  
+   This project was created as an automation experiment and learning exercise. Commercial use or resale in any form is strictly prohibited.
+
+2. **You bear all account risks.**  
+   Using bots in online games may violate Cygames' Terms of Service. Any consequences such as **bans, suspensions, or account deletion** are solely your responsibility. The developer is not liable for any losses.
+
+3. **No unauthorized redistribution.**  
+   Spreading, selling, or forking this project without explicit permission from the repository owner is prohibited.
+
+4. **No warranty.**  
+   This software is provided "as-is" without any guarantee. The developer does not guarantee it will run perfectly on all systems or conditions.
+
+5. **Protect your privacy & security.**  
+   Never share your `settings.json` file publicly as it contains sensitive API tokens (Twitter, Discord).
+
+6. **Use responsibly.**  
+   Avoid actions that could harm other players (e.g., flooding raid rooms, monopolizing resources).
+
+---
+
+## 📋 Project Description
+
+Granblue Automation is a bot capable of automatically running various battle modes in Granblue Fantasy using:
+
+- **Computer Vision** — Game element detection via screenshots using OpenCV & template matching
+- **OCR** — On-screen text reading via EasyOCR
+- **Mouse & Keyboard Automation** — Automated control via PyAutoGUI with Bezier curve mouse movements
+- **Multi-process** — Bot runs in a separate process to avoid blocking the UI
+- **Notifications** — Discord & Twitter integration for real-time alerts
+
+---
+
+## 🎮 Supported Modes
+
+| Mode | File |
+|---|---|
+| Quest (Normal/Hard/VH/EX) | `quest.py` |
+| Raid | `raid.py` |
+| Event | `event.py` |
+| Guild Wars | `guild_wars.py` |
+| Coop | `coop.py` |
+| Arcarum | `arcarum.py` |
+| Arcarum Sandbox | `arcarum_sandbox.py` |
+| Dread Barrage | `dread_barrage.py` |
+| Proving Grounds | `proving_grounds.py` |
+| Rise of the Beasts (RotB) | `rotb.py` |
+| Special | `special.py` |
+| Generic | `generic.py` / `generic_v2.py` |
+
+---
+
+## 🛠️ System Requirements
+
+| Component | Requirement |
+|---|---|
+| OS | Windows 10/11 (64-bit) |
+| Python | 3.9+ |
+| GPU | NVIDIA with CUDA 11.6 (for PyTorch) |
+| RAM | Minimum 8 GB |
+| Browser | Chrome/Edge with Granblue Fantasy active |
+| Resolution | Adjusted via `customScale` setting |
+
+---
+
+## 📦 Installation & Setup
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/<username>/<repo-name>.git
+cd <repo-name>
+```
+
+### 2. Create a virtual environment
+
+```bash
+cd backend
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+### 3. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+> **Note:** PyTorch (`torch`, `torchvision`, `torchaudio`) will be downloaded from the PyTorch server and requires a stable internet connection. File size is quite large (~2 GB).
+
+### 4. Configure `settings.json`
+
+Edit the `backend/settings.json` file. **Do not commit this file to Git** (already excluded via `.gitignore`).
+
+Main configuration:
+
+```json
+{
+  "game": {
+    "farmingMode": "Raid",
+    "item": "Tiamat Omega",
+    "mission": "Lvl 100 Tiamat Omega Ayr",
+    "itemAmount": 100,
+    "groupNumber": 3,
+    "partyNumber": 2
+  }
+}
+```
+
+### 5. Run the bot
+
+```bash
+cd backend
+python main.py
+```
+
+Or use the executable directly:
+
+```bash
+"Granblue Automation.exe"
+```
+
+---
+
+## ⚙️ Advanced Configuration
+
+### Combat Script
+
+Create a `.txt` file in the `scripts/` folder to define the order of combat actions. Example format (`full_auto.txt`):
+
+```
+Turn 1:
+enableFullAuto
+end
+```
+
+See existing example scripts in the `scripts/` folder for further reference.
+
+### Discord Notifications
+
+Enable in `settings.json`:
+
+```json
+"discord": {
+  "enableDiscordNotifications": true,
+  "discordToken": "YOUR_BOT_TOKEN",
+  "discordUserID": "YOUR_USER_ID"
+}
+```
+
+### Twitter Notifications
+
+```json
+"twitter": {
+  "twitterUseVersion2": true,
+  "twitterAPIKey": "...",
+  "twitterAPIKeySecret": "...",
+  "twitterAccessToken": "...",
+  "twitterAccessTokenSecret": "..."
+}
+```
+
+---
+
+## 📁 Project Structure
+
+```
+Granblue.Automation.v3.1.1/
+├── backend/
+│   ├── bot/
+│   │   ├── game.py              # Core game logic
+│   │   ├── combat_mode.py       # Combat mode handler
+│   │   ├── dom_clicker.py       # Browser DOM control
+│   │   ├── window.py            # Window management
+│   │   └── game_modes/          # Modules for each farming mode
+│   ├── model/                   # ML models (if any)
+│   ├── utils/                   # Utilities (logging, image, etc.)
+│   ├── main.py                  # Entry point
+│   ├── requirements.txt         # Python dependencies
+│   └── settings.json            # Configuration (DO NOT commit!)
+├── images/                      # Template images for detection
+├── scripts/                     # Custom combat scripts (.txt)
+├── logs/                        # Bot session logs (ignored by Git)
+└── README.md                    # This documentation
+```
+
+---
+
+## 🐛 Debugging & Troubleshooting
+
+- Enable `"debugMode": true` in `settings.json` for more detailed logs.
+- Logs are saved in the `logs/` folder and excluded from Git.
+- If the bot fails to detect elements correctly, try adjusting:
+  - `"confidence"` and `"confidenceAll"` in the `device` section
+  - `"customScale"` to match your monitor resolution
+  - `adjustment` values for fine-tuning timing
+
+---
+
+## 🤝 Contributing
+
+Pull requests are welcome for:
+- Bug fixes
+- New farming mode additions
+- Improved detection accuracy
+
+Ensure submitted code:
+1. Contains no tokens or secrets
+2. Follows the existing code style (docstrings, type hints)
+3. Includes a change description in the PR description
+
+---
+
+## 📄 License
+
+This project has **no official open-source license**.  
+Use is limited to **personal and educational purposes** only.  
+Redistribution and commercial use are **prohibited** without written permission from the owner.
+
+---
+
+## ⚡ Disclaimer
+
+> This project is **not affiliated with, sponsored by, or endorsed by** Cygames, Inc.  
+> "Granblue Fantasy" is a trademark of Cygames, Inc.  
+> Use wisely and at your own risk.
 
 ---
 
