@@ -69,6 +69,8 @@ class Raid:
     _FINDER_RAID_NAME_OVERRIDES = {
         "Lvl 100 Tiamat Omega Ayr": "Tiamat Aura Omega (Impossible)",
         "Lvl 100 Colossus Omega": "Colossus Ira Omega (Impossible)",
+        "Lvl 100 Leviathan Omega": "Leviathan Mare Omega (Impossible)",
+        "Lvl 100 Yggdrasil Omega": "Yggdrasil Arbos Omega (Impossible)",
         "EX Zhuque": "Lvl 60 Zhuque",
         "EX Xuanwu": "Lvl 60 Xuanwu",
         "EX Baihu": "Lvl 60 Baihu",

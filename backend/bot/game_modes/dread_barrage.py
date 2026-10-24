@@ -16,6 +16,74 @@ class DreadBarrage:
     """
 
     @staticmethod
+    def _difficulty_index() -> int:
+        """Return the one-based Dread Barrage difficulty index from the mission setting."""
+        for index in range(1, 6):
+            if Settings.mission_name.startswith(f"{index} Star"):
+                return index
+
+        raise DreadBarrageException(f"Unsupported Dread Barrage mission: {Settings.mission_name}")
+
+    @staticmethod
+    def _confirm_event_page() -> bool:
+        """Confirm the Dread Barrage landing page using DOM state, then image fallback."""
+        from bot.game import Game
+
+        if getattr(Settings, "enable_dom_clicking", False):
+            is_dread_barrage = Game.evaluate_dom_js("""(() => {
+                const hash = window.location.hash || '';
+                const page = document.querySelector('.cnt-teamforce');
+                return hash.includes('event/teamforce') && Boolean(page && page.offsetParent !== null);
+            })()""")
+            if is_dread_barrage:
+                MessageLog.print_message("[DREAD.BARRAGE] Confirmed Dread Barrage page via DOM.")
+                return True
+
+        return ImageUtils.confirm_location("dread_barrage")
+
+    @staticmethod
+    def _click_difficulty_dom(difficulty_index: int) -> bool:
+        """Click an unlocked Dread Barrage difficulty using its stable DOM index."""
+        from bot.game import Game
+
+        if not getattr(Settings, "enable_dom_clicking", False):
+            return False
+
+        click_result = Game.evaluate_dom_js(f"""(() => {{
+            const selector = ".cnt-teamforce .btn-start-quest.open[data-enemy-index='{difficulty_index}']";
+            const target = Array.from(document.querySelectorAll(selector)).find(el => {{
+                if (el.offsetParent === null) return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }});
+            if (!target) return {{success: false}};
+
+            try {{ target.scrollIntoView({{block: 'center', behavior: 'instant'}}); }} catch (e) {{}}
+
+            if (window.$) {{
+                try {{
+                    $(target).trigger('tap');
+                    return {{success: true, method: 'tap'}};
+                }} catch (e) {{}}
+            }}
+
+            try {{
+                target.click();
+                return {{success: true, method: 'click'}};
+            }} catch (e) {{
+                return {{success: false}};
+            }}
+        }})()""")
+
+        if isinstance(click_result, dict) and click_result.get("success"):
+            MessageLog.print_message(
+                f"[DREAD.BARRAGE] Selected {difficulty_index} Star via DOM ({click_result.get('method', 'click')})."
+            )
+            return True
+
+        return False
+
+    @staticmethod
     def _navigate():
         """Navigates to the specified Dread Barrage mission.
 
@@ -41,7 +109,7 @@ class DreadBarrage:
 
         Game.wait(3.0)
 
-        if ImageUtils.confirm_location("dread_barrage"):
+        if DreadBarrage._confirm_event_page():
             # Check if there is already a hosted Dread Barrage mission.
             if ImageUtils.confirm_location("resume_quests"):
                 MessageLog.print_message(f"\n[WARNING] Detected that there is already a hosted Dread Barrage mission.")
@@ -64,37 +132,22 @@ class DreadBarrage:
 
                 MessageLog.print_message(f"\n[SUCCESS] Hosted Dread Barrage mission is now gone either because of timeout or someone else in the room killed it. Moving on...\n")
 
-            # Find all the "Play" buttons at the top of the window.
-            dread_barrage_play_button_locations = ImageUtils.find_all("dread_barrage_play")
+            difficulty_index = DreadBarrage._difficulty_index()
+            MessageLog.print_message(
+                f"[DREAD.BARRAGE] Now starting {difficulty_index} Star Dread Barrage Raid..."
+            )
 
-            difficulty = ""
-            if Settings.mission_name.find("1 Star") == 0:
-                difficulty = "1 Star"
-            elif Settings.mission_name.find("2 Star") == 0:
-                difficulty = "2 Star"
-            elif Settings.mission_name.find("3 Star") == 0:
-                difficulty = "3 Star"
-            elif Settings.mission_name.find("4 Star") == 0:
-                difficulty = "4 Star"
-            elif Settings.mission_name.find("5 Star") == 0:
-                difficulty = "5 Star"
+            if not DreadBarrage._click_difficulty_dom(difficulty_index):
+                # Retain image matching for browsers where DevTools/DOM access is unavailable.
+                dread_barrage_play_button_locations = ImageUtils.find_all("dread_barrage_play")
+                if len(dread_barrage_play_button_locations) < difficulty_index:
+                    raise DreadBarrageException(
+                        f"Failed to find the unlocked {difficulty_index} Star Dread Barrage Play button. "
+                        f"Detected {len(dread_barrage_play_button_locations)} Play button(s)."
+                    )
 
-            # Navigate to the specified difficulty.
-            if difficulty == "1 Star":
-                MessageLog.print_message(f"[DREAD.BARRAGE] Now starting 1 Star Dread Barrage Raid...")
-                MouseUtils.move_and_click_point(dread_barrage_play_button_locations[0][0], dread_barrage_play_button_locations[0][1], "dread_barrage_play")
-            elif difficulty == "2 Star":
-                MessageLog.print_message(f"[DREAD.BARRAGE] Now starting 2 Star Dread Barrage Raid...")
-                MouseUtils.move_and_click_point(dread_barrage_play_button_locations[1][0], dread_barrage_play_button_locations[1][1], "dread_barrage_play")
-            elif difficulty == "3 Star":
-                MessageLog.print_message(f"[DREAD.BARRAGE] Now starting 3 Star Dread Barrage Raid...")
-                MouseUtils.move_and_click_point(dread_barrage_play_button_locations[2][0], dread_barrage_play_button_locations[2][1], "dread_barrage_play")
-            elif difficulty == "4 Star":
-                MessageLog.print_message(f"[DREAD.BARRAGE] Now starting 4 Star Dread Barrage Raid...")
-                MouseUtils.move_and_click_point(dread_barrage_play_button_locations[3][0], dread_barrage_play_button_locations[3][1], "dread_barrage_play")
-            elif difficulty == "5 Star":
-                MessageLog.print_message(f"[DREAD.BARRAGE] Now starting 5 Star Dread Barrage Raid...")
-                MouseUtils.move_and_click_point(dread_barrage_play_button_locations[4][0], dread_barrage_play_button_locations[4][1], "dread_barrage_play")
+                target = dread_barrage_play_button_locations[difficulty_index - 1]
+                MouseUtils.move_and_click_point(target[0], target[1], "dread_barrage_play")
 
             Game.wait(2)
         else:

@@ -36,12 +36,207 @@ class CombatMode:
     _command_turn_number = 1
     _turn_number = 1  # Current turn for the script execution.
     _wipe_check_counter: int = 0
+    _FULL_AUTO_CONTROL_WAIT_ATTEMPTS = 45
+    _FULL_AUTO_ACTIVATION_VERIFY_ATTEMPTS = 6
+
+    @staticmethod
+    def _combat_safety_timeout_seconds():
+        """Return the bounded monitor timeout, or ``None`` when explicitly disabled."""
+        if getattr(Settings, "enable_no_timeout", False):
+            return None
+
+        configured = float(getattr(Settings, "time_allowed_until_auto_exit_raid", 600))
+        return max(60.0, configured)
+
+    @staticmethod
+    def _check_monitor_safety_timeout(start_time: float, workflow_name: str) -> None:
+        """Stop a passive monitor that can no longer prove forward progress."""
+        timeout = CombatMode._combat_safety_timeout_seconds()
+        now = time.time()
+        if timeout is None or now - start_time < timeout:
+            return
+
+        elapsed = int(now - start_time)
+        MessageLog.print_message(
+            f"[ERROR] {workflow_name} exceeded its {int(timeout)}s safety limit "
+            f"({elapsed}s elapsed). Starting bounded Home recovery."
+        )
+        raise CombatModeException("Time Exceeded")
 
     ######################################################################
     ######################################################################
     # Checks
     ######################################################################
     ######################################################################
+
+    @staticmethod
+    def _click_raid_elixir_prompt() -> bool:
+        """Click only an elixir/revive control that belongs to the visible wipe prompt."""
+        from bot.game import Game
+
+        try:
+            result = Game.evaluate_dom_js(r"""(() => {
+                function visible(el) {
+                    if (!el || el.offsetParent === null) return false;
+                    const style = window.getComputedStyle(el);
+                    return style.display !== 'none' && style.visibility !== 'hidden';
+                }
+                function activate(el) {
+                    let activated = false;
+                    if (window.$ && typeof window.$(el).trigger === 'function') {
+                        try { window.$(el).trigger('tap'); activated = true; } catch (_) {}
+                    }
+                    if (!activated) el.click();
+                }
+
+                // Prefer controls whose purpose is unambiguous, even when the game renders
+                // them outside the generic popup container.
+                const direct = Array.from(document.querySelectorAll('.btn-use-elixir, .btn-revive'))
+                    .find(visible);
+                if (direct) {
+                    activate(direct);
+                    return true;
+                }
+
+                // A wiped party normally gets a generic OK/Cancel popup.  Only accept its
+                // generic OK when the popup text proves that it is the elixir prompt.
+                const popups = document.querySelectorAll(
+                    '.pop-usual, .prt-popup, .prt-popup-body, [class*="pop-continue"]'
+                );
+                for (const popup of popups) {
+                    if (!visible(popup)) continue;
+                    const text = (popup.innerText || popup.textContent || '').toLowerCase();
+                    const isElixirPrompt = text.includes('elixir') || text.includes('revive') ||
+                        text.includes('come back') || text.includes('\u5168\u6ec5');
+                    if (!isElixirPrompt) continue;
+                    const confirm = Array.from(popup.querySelectorAll(
+                        '.btn-use-elixir, .btn-revive, .btn-usual-ok, .btn-ok'
+                    )).find(visible);
+                    if (confirm) {
+                        activate(confirm);
+                        return true;
+                    }
+                }
+                return false;
+            })()""")
+            return bool(result)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _raid_party_revive_state():
+        """Return True when revived, False while still wiped, or None if CDP cannot tell."""
+        from bot.game import Game
+
+        try:
+            result = Game.evaluate_dom_js(r"""(() => {
+                function visible(el) {
+                    if (!el || el.offsetParent === null) return false;
+                    const style = window.getComputedStyle(el);
+                    return style.display !== 'none' && style.visibility !== 'hidden';
+                }
+
+                const wipeControl = Array.from(document.querySelectorAll(
+                    '.btn-use-elixir, .btn-revive'
+                )).some(visible);
+                if (wipeControl) return false;
+
+                const popups = document.querySelectorAll('.pop-usual, .prt-popup, .prt-popup-body');
+                for (const popup of popups) {
+                    if (!visible(popup)) continue;
+                    const text = (popup.innerText || popup.textContent || '').toLowerCase();
+                    if (text.includes('elixir') || text.includes('revive') ||
+                            text.includes('come back') || text.includes('\u5168\u6ec5')) return false;
+                }
+
+                const player = window.stage && window.stage.gGameStatus &&
+                    window.stage.gGameStatus.player;
+                if (player && Array.isArray(player.param) && player.param.length) {
+                    return player.param.some(member =>
+                        member && Number(member.hp) > 0 && member.alive !== 0
+                    );
+                }
+
+                const hash = window.location.hash || '';
+                const battleControl = Array.from(document.querySelectorAll(
+                    '.btn-attack-start, .btn-auto, .btn-raid-menu'
+                )).some(visible);
+                if ((hash.includes('raid') || hash.includes('stage')) && battleControl) return true;
+                return null;
+            })()""")
+            return result if isinstance(result, bool) else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _revive_raid_party_with_elixir(party_wipe_indicator = None) -> bool:
+        """Use a Full Elixir after a Raid wipe and verify that combat is resumable."""
+        from bot.game import Game
+
+        MessageLog.print_message(
+            "[RAID] Party wipe detected. Attempting to use a Full Elixir and resume this raid..."
+        )
+
+        prompt_activated = CombatMode._click_raid_elixir_prompt()
+        for attempt in range(10):
+            if not prompt_activated:
+                indicator = party_wipe_indicator
+                if indicator is None:
+                    indicator = ImageUtils.find_button(
+                        "party_wipe_indicator", tries = 1, suppress_error = True
+                    )
+                if indicator is not None:
+                    MouseUtils.move_and_click_point(
+                        indicator[0], indicator[1], "party_wipe_indicator"
+                    )
+                    party_wipe_indicator = None
+                    prompt_activated = True
+                    Game.wait(0.5)
+
+            # The first click may open a second confirmation prompt.
+            if CombatMode._click_raid_elixir_prompt():
+                prompt_activated = True
+
+            # Image fallback is deliberately gated by the Continue header so a generic OK
+            # elsewhere can never spend or confirm an unrelated action.
+            if ImageUtils.confirm_location("continue", tries = 1, suppress_error = True):
+                if Game.find_and_click_button("ok", tries = 1, suppress_error = True):
+                    prompt_activated = True
+
+            Game.wait(1.0)
+            revive_state = CombatMode._raid_party_revive_state()
+            if revive_state is True:
+                MessageLog.print_message(
+                    "[SUCCESS] Full Elixir used successfully. Resuming the current raid."
+                )
+                return True
+
+            # CDP-less fallback: an Attack control with no wipe/Continue indicator is enough
+            # evidence that the party returned to active combat.
+            if revive_state is None and prompt_activated:
+                wipe_still_visible = ImageUtils.find_button(
+                    "party_wipe_indicator", tries = 1, suppress_error = True
+                ) is not None
+                continue_visible = ImageUtils.confirm_location(
+                    "continue", tries = 1, suppress_error = True
+                )
+                attack_visible = ImageUtils.find_button(
+                    "attack", tries = 1, suppress_error = True
+                ) is not None
+                if attack_visible and not wipe_still_visible and not continue_visible:
+                    MessageLog.print_message(
+                        "[SUCCESS] Full Elixir use verified from the restored battle controls."
+                    )
+                    return True
+
+            if attempt < 9:
+                Game.wait(0.5)
+
+        MessageLog.print_message(
+            "[WARNING] Could not confirm Full Elixir use (it may be unavailable). "
+            "Falling back to Home recovery."
+        )
+        return False
 
     @staticmethod
     def _check_for_wipe():
@@ -80,7 +275,11 @@ class CombatMode:
 
         if wipe_detected:
             CombatMode._wipe_check_counter = 0
-            if (Settings.farming_mode != "Raid" and Settings.farming_mode != "Dread Barrage") and ImageUtils.confirm_location("continue"):
+            if Settings.farming_mode == "Raid":
+                if not CombatMode._revive_raid_party_with_elixir(party_wipe_indicator):
+                    Game.go_back_home(confirm_location_check = True)
+                    CombatMode._retreat_check = True
+            elif (Settings.farming_mode != "Dread Barrage") and ImageUtils.confirm_location("continue"):
                 # Click on the blue indicator to get rid of the overlay.
                 if party_wipe_indicator is not None:
                     MouseUtils.move_and_click_point(party_wipe_indicator[0], party_wipe_indicator[1], "party_wipe_indicator")
@@ -93,7 +292,7 @@ class CombatMode:
                 Game.find_and_click_button("cancel")
                 Game.find_and_click_button("retreat_confirmation")
                 CombatMode._retreat_check = True
-            elif Settings.farming_mode == "Raid" or Settings.farming_mode == "Dread Barrage" or Settings.farming_mode == "Guild Wars" or Settings.map_name.__contains__("Raid"):
+            elif Settings.farming_mode == "Dread Barrage" or Settings.farming_mode == "Guild Wars" or Settings.map_name.__contains__("Raid"):
                 MessageLog.print_message(f"[WARNING] Party has unfortunately wiped during Combat Mode for this Raid battle. Backing out now without retreating...")
 
                 # Head back to the Home screen.
@@ -1226,12 +1425,16 @@ class CombatMode:
                         MessageLog.print_message(f"[COMBAT] Full Auto is already active ({res.get('cls')}). Skipping click.")
                     else:
                         MessageLog.print_message(f"[COMBAT] Full Auto activation dispatched via DOM ({res.get('cls')}).")
-                    Game.wait(0.6)
-                    CombatMode._full_auto = CombatMode._is_full_auto_active()
-                    if CombatMode._full_auto:
-                        CombatMode._full_auto_last_enabled_time = time.time()
-                        MessageLog.print_message("[COMBAT] Full Auto state verified active.")
-                        return True
+                    # The click can be accepted before the game finishes updating its combat
+                    # state on a slow connection. Poll briefly instead of immediately treating
+                    # that delayed state transition as an activation failure.
+                    for _ in range(CombatMode._FULL_AUTO_ACTIVATION_VERIFY_ATTEMPTS):
+                        Game.wait(0.5)
+                        CombatMode._full_auto = CombatMode._is_full_auto_active()
+                        if CombatMode._full_auto:
+                            CombatMode._full_auto_last_enabled_time = time.time()
+                            MessageLog.print_message("[COMBAT] Full Auto state verified active.")
+                            return True
                     MessageLog.print_message("[WARNING] Full Auto activation was dispatched but active state was not verified.")
             except Exception as exc:
                 if Settings.debug_mode:
@@ -1242,6 +1445,48 @@ class CombatMode:
             "[WARNING] Full Auto DOM control is not ready or CDP is unavailable. "
             "No physical cursor click was attempted."
         )
+        return False
+
+    @staticmethod
+    def _wait_for_full_auto_control(max_attempts: int = None) -> bool:
+        """Wait until the battle's Full Auto control is usable through CDP.
+
+        The Attack button can render before the rest of the battle controls on a slow
+        connection. Treating that partial render as a fully-loaded battle causes the bot to
+        fail Full Auto immediately and navigate Home. Keep polling the control that is
+        actually required, and continue dismissing READY while the battle finishes loading.
+        """
+        from bot.game import Game
+
+        attempts = max_attempts or CombatMode._FULL_AUTO_CONTROL_WAIT_ATTEMPTS
+        for attempt in range(attempts):
+            control_ready = False
+            try:
+                control_ready = bool(Game.evaluate_dom_js("""(() => {
+                    let candidates = Array.from(document.querySelectorAll('.btn-auto:not(.semi), .btn-auto'));
+                    let status = window.stage && window.stage.gGameStatus;
+                    if (status && (status.auto_attack === 1 || status.is_auto || status.auto)) {
+                        return true;
+                    }
+                    return candidates.some(el => {
+                        let cls = el.className || '';
+                        let active = cls.includes('select') || cls.includes('active') || cls.includes('state-auto');
+                        let visible = el.offsetParent !== null &&
+                            window.getComputedStyle(el).display !== 'none' &&
+                            window.getComputedStyle(el).visibility !== 'hidden';
+                        return active || visible;
+                    });
+                })()"""))
+            except Exception:
+                pass
+
+            if control_ready:
+                return True
+
+            Game.check_and_tap_ready()
+            if attempt < attempts - 1:
+                Game.wait(1.0)
+
         return False
 
     @staticmethod
@@ -1399,13 +1644,20 @@ class CombatMode:
             Game.find_and_click_button("reload")
             Game.wait(3.0)
 
-            MessageLog.print_message("[COMBAT] Waiting for raid battle to conclude after reload (no timeout)...")
+            timeout = CombatMode._combat_safety_timeout_seconds()
+            timeout_text = "disabled by configuration" if timeout is None else f"{int(timeout)}s"
+            MessageLog.print_message(
+                f"[COMBAT] Waiting for raid battle to conclude after reload "
+                f"(safety timeout: {timeout_text})..."
+            )
 
             last_log_time = time.time()
             last_reload_time = time.time()
 
             # Step 3: Monitor for battle end
             while not CombatMode._retreat_check:
+                CombatMode._check_monitor_safety_timeout(start_time, "Semi Auto result monitor")
+
                 # 1. Check if battle has ended (detects result URL hash or result DOM element)
                 CombatMode._check_for_battle_end()
 
@@ -1457,11 +1709,18 @@ class CombatMode:
 
         start_time = time.time()
 
-        MessageLog.print_message("[COMBAT] Full Auto is running. Monitoring battle progress (no reload, no timeout)...")
+        timeout = CombatMode._combat_safety_timeout_seconds()
+        timeout_text = "disabled by configuration" if timeout is None else f"{int(timeout)}s"
+        MessageLog.print_message(
+            f"[COMBAT] Full Auto is running. Monitoring battle progress "
+            f"(safety timeout: {timeout_text})..."
+        )
 
         last_log_time = time.time()
 
         while not CombatMode._retreat_check:
+            CombatMode._check_monitor_safety_timeout(start_time, "Full Auto monitor")
+
             # 1. Check if battle has ended (DOM, URL, image checks)
             CombatMode._check_for_battle_end()
 
@@ -1910,45 +2169,13 @@ class CombatMode:
             full_auto_directive and full_auto_structural_only
         )
 
-        # If Full Auto mode: wait for battle screen to load, then ensure Full Auto is actually active.
+        # If Full Auto mode: wait for its control to load, then ensure Full Auto is actually active.
         # This works seamlessly for both Run 1 and repeated runs (looping) without double-toggling.
         if is_full_auto_mode:
-            MessageLog.print_message("[COMBAT] Full Auto mode: waiting for battle screen to load...")
-            battle_loaded = False
-            tries_remaining = 15
-            while tries_remaining > 0:
-                dom_battle = False
-                try:
-                    dom_battle = Game.evaluate_dom_js("""(() => {
-                        let att = document.querySelector('.btn-attack-start');
-                        let auto = document.querySelector('.btn-auto');
-                        return Boolean(
-                            (att && window.getComputedStyle(att).display !== 'none') ||
-                            (auto && window.getComputedStyle(auto).display !== 'none')
-                        );
-                    })()""")
-                except Exception:
-                    pass
-
-                if dom_battle or \
-                   ImageUtils.find_button("attack", tries = 1, suppress_error = True) is not None or \
-                   ImageUtils.find_button("full_auto", tries = 1, suppress_error = True) is not None:
-                    battle_loaded = True
-                    break
-
-                # Also tap READY if it appears while loading
-                if Game.check_and_tap_ready():
-                    Game.wait(1.0)
-
-                tries_remaining -= 1
-                if tries_remaining > 0:
-                    Game.wait(1.0)
-
-            Game.wait(0.5)
-
-            if not battle_loaded:
+            MessageLog.print_message("[COMBAT] Full Auto mode: waiting for battle controls to load...")
+            if not CombatMode._wait_for_full_auto_control():
                 MessageLog.print_message(
-                    "[ERROR] Battle screen did not load within the expected window. "
+                    "[ERROR] Full Auto control did not become ready within 45 seconds. "
                     "Recovering instead of entering an unbounded Full Auto monitor."
                 )
                 Game.go_back_home(confirm_location_check = True)

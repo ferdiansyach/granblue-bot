@@ -56,6 +56,9 @@ Thumbs.db
 # Scratch scripts (local experiments)
 scratch_*.py
 test_*.py
+!backend/tests/test_recovery_watchdog.py
+!backend/tests/test_dread_barrage.py
+!backend/tests/test_raid_elixir_recovery.py
 find_*.py
 
 # Backend specific

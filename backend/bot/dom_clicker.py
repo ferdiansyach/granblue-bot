@@ -208,6 +208,9 @@ class DomClicker:
             ".btn-global-banner[data-href*='event']",
             ".btn-global-banner",
         ],
+        "dread_barrage": [
+            ".btn-global-banner[data-href='event/teamforce']",
+        ],
         "guild_wars_banner": [
             ".btn-global-banner[data-href*='teamraid']",
             ".btn-global-banner[data-href*='event']",

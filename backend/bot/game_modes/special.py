@@ -1,3 +1,5 @@
+import json
+
 from utils.settings import Settings
 from utils.message_log import MessageLog
 from utils.image_utils import ImageUtils
@@ -18,6 +20,119 @@ class Special:
     _dimensional_halo_amount = 0
 
     @staticmethod
+    def _is_quest_page() -> bool:
+        """Confirm the main Quest page through its route before image fallback."""
+        from bot.game import Game
+
+        dom_match = Game.evaluate_dom_js("""(() => {
+            const hash = window.location.hash || '';
+            return hash === '#quest' || hash.startsWith('#quest/index') ||
+                Boolean(document.querySelector('.btn-extra-quest, [data-href="quest/extra"]'));
+        })()""")
+        if dom_match:
+            return True
+
+        return bool(ImageUtils.confirm_location(
+            "quest", tries = 1, suppress_error = True
+        ))
+
+    @staticmethod
+    def _is_special_page() -> bool:
+        """Confirm the modern Special Quest page, with the old header as fallback."""
+        from bot.game import Game
+
+        dom_match = Game.evaluate_dom_js("""(() => {
+            const hash = window.location.hash || '';
+            const list = document.querySelector('.prt-extra, .prt-quest-list');
+            return hash.includes('quest/extra') && Boolean(list);
+        })()""")
+        if dom_match:
+            return True
+
+        return bool(ImageUtils.confirm_location(
+            "special", tries = 1, suppress_error = True
+        ))
+
+    @staticmethod
+    def _special_card_exists(card_title: str) -> bool:
+        """Return whether a named card exists on the modern Special Quest page."""
+        from bot.game import Game
+
+        title_json = json.dumps(card_title)
+        return bool(Game.evaluate_dom_js(f"""(() => {{
+            const wanted = {title_json};
+            return Array.from(document.querySelectorAll('.lis-event-list .txt-quest-title'))
+                .some(title => title.textContent.trim() === wanted &&
+                    title.closest('.lis-event-list')?.querySelector('.btn-stage-detail'));
+        }})()"""))
+
+    @staticmethod
+    def _click_special_card(card_title: str) -> bool:
+        """Open a named modern Special Quest card through its own Select control."""
+        from bot.game import Game
+
+        title_json = json.dumps(card_title)
+        clicked = Game.evaluate_dom_js(f"""(() => {{
+            const wanted = {title_json};
+            const title = Array.from(document.querySelectorAll(
+                '.lis-event-list .txt-quest-title'
+            )).find(el => el.textContent.trim() === wanted);
+            const card = title?.closest('.lis-event-list');
+            const button = card?.querySelector('.btn-stage-detail');
+            if (!button) return false;
+            if (window.$ && typeof window.$(button).trigger === 'function') {{
+                window.$(button).trigger('tap');
+            }} else {{
+                button.click();
+            }}
+            return true;
+        }})()""")
+        if clicked:
+            MessageLog.print_message(
+                f"[SPECIAL] Opened the modern Special Quest card: {card_title}."
+            )
+        return bool(clicked)
+
+    @staticmethod
+    def _click_special_difficulty(difficulty: str = "", chapter_name: str = "") -> bool:
+        """Select a quest row in the currently visible modern Special Quest dialog."""
+        from bot.game import Game
+
+        difficulty_values = {
+            "Normal": "1",
+            "Hard": "2",
+            "Very Hard": "3",
+            "Extreme": "4",
+        }
+        if not difficulty and not chapter_name:
+            return False
+        if difficulty and difficulty not in difficulty_values:
+            return False
+        difficulty_json = json.dumps(difficulty_values.get(difficulty, ""))
+        chapter_json = json.dumps(chapter_name)
+        return bool(Game.evaluate_dom_js(f"""(() => {{
+            const difficulty = {difficulty_json};
+            const chapter = {chapter_json};
+            const popup = Array.from(document.querySelectorAll('.pop-quest-detail'))
+                .find(el => el.offsetParent !== null);
+            if (!popup) return false;
+
+            const rows = Array.from(popup.querySelectorAll('.btn-set-quest'));
+            const button = rows.find(el =>
+                !el.classList.contains('disable') &&
+                (!difficulty || el.dataset.difficulty === difficulty) &&
+                (!chapter || el.dataset.chapterName === chapter)
+            );
+            if (!button) return false;
+            if (window.$ && typeof window.$(button).trigger === 'function') {{
+                window.$(button).trigger('tap');
+            }} else {{
+                button.click();
+            }}
+            return true;
+        }})()"""))
+
+    @staticmethod
     def check_for_dimensional_halo():
         """Checks for Dimensional Halo and if it appears and the user enabled it in user settings, start it.
 
@@ -26,7 +141,14 @@ class Special:
         """
         from bot.game import Game
 
-        if Settings.enable_nightmare and ImageUtils.confirm_location("limited_time_quests", tries = 3):
+        modern_dimension_halo = Special._special_card_exists("Dimension Halo")
+        legacy_dimension_halo = False
+        if not modern_dimension_halo:
+            legacy_dimension_halo = ImageUtils.confirm_location(
+                "limited_time_quests", tries = 3, suppress_error = True
+            )
+
+        if Settings.enable_nightmare and (modern_dimension_halo or legacy_dimension_halo):
             MessageLog.print_message("\n[D.HALO] Detected Dimensional Halo. Starting it now...")
             Special._dimensional_halo_amount += 1
 
@@ -41,8 +163,15 @@ class Special:
             MessageLog.print_message("********************************************************************************")
             MessageLog.print_message("********************************************************************************\n")
 
-            # Click the "Play Next" button to head to the Summon Selection screen.
-            Game.find_and_click_button("play_next")
+            if modern_dimension_halo:
+                if not Special._click_special_card("Dimension Halo"):
+                    raise SpecialException("Failed to open the Dimension Halo card.")
+                Game.wait(0.5)
+                if not Special._click_special_difficulty(chapter_name = "Dimension Halo"):
+                    raise SpecialException("Failed to select the modern Dimension Halo quest row.")
+            else:
+                # Compatibility fallback for the old Limited-Time Quests popup.
+                Game.find_and_click_button("play_next")
 
             Game.wait(1)
 
@@ -56,9 +185,10 @@ class Special:
                     Game.collect_loot_safe(is_completed = False, is_event_nightmare = True)
                     return True
 
-        elif not Settings.enable_nightmare and ImageUtils.confirm_location("limited_time_quests", tries = 3):
+        elif not Settings.enable_nightmare and (modern_dimension_halo or legacy_dimension_halo):
             MessageLog.print_message("\n[D.HALO] Dimensional Halo detected but user opted to not run it. Moving on...")
-            Game.find_and_click_button("close")
+            if legacy_dimension_halo:
+                Game.find_and_click_button("close")
         else:
             MessageLog.print_message("\n[D.HALO] No Dimensional Halo detected. Moving on...")
 
@@ -86,9 +216,10 @@ class Special:
         if ImageUtils.confirm_location("you_retreated_from_the_raid_battle", tries = 3):
             Game.find_and_click_button("ok")
 
-        if ImageUtils.confirm_location("quest"):
+        if Special._is_quest_page():
             # Go to the Special screen.
             Game.find_and_click_button("special")
+            Game.wait(1.0)
 
             # Remove the difficulty prefix from the mission name.
             difficulty = ""
@@ -107,7 +238,7 @@ class Special:
             else:
                 formatted_mission_name = Settings.mission_name
 
-            if ImageUtils.confirm_location("special"):
+            if Special._is_special_page():
                 tries = 2
 
                 # Try to select the specified Special mission for a number of tries.
@@ -118,7 +249,12 @@ class Special:
                         MouseUtils.scroll_screen_from_home_button(-500)
                         scrolled = True
 
-                    if Settings.map_name == "Showdowns" or Settings.map_name == "Xeno Clash":
+                    modern_angel_halo = Settings.map_name == "Angel Halo" and \
+                        Special._special_card_exists("Angel Halo")
+
+                    if modern_angel_halo:
+                        mission_select_button = True
+                    elif Settings.map_name == "Showdowns" or Settings.map_name == "Xeno Clash":
                         mission_select_button = ImageUtils.find_button("special_showdowns_xeno_clashes")
                     else:
                         mission_select_button = ImageUtils.find_button(Settings.map_name.lower().replace(" ", "_").replace("-", "_"))
@@ -282,20 +418,24 @@ class Special:
                             # Start up the Angel Halo mission by selecting its difficulty.
                             MessageLog.print_message(f"[SPECIAL] Selecting {difficulty} Angel Halo...")
 
-                            if scrolled:
+                            if modern_angel_halo:
+                                if not Special._click_special_card("Angel Halo"):
+                                    raise SpecialException("Failed to open the modern Angel Halo card.")
+                            elif scrolled:
                                 MouseUtils.move_and_click_point(select_buttons[len(select_buttons) - 1 - 1][0], select_buttons[len(select_buttons) - 1 - 1][1], "select")
                             else:
                                 MouseUtils.move_and_click_point(select_buttons[3][0], select_buttons[3][1], "select")
                             Game.wait(1)
 
-                            locations = ImageUtils.find_all("play_round_button")
+                            if not Special._click_special_difficulty(difficulty = difficulty):
+                                locations = ImageUtils.find_all("play_round_button")
 
-                            if difficulty == "Normal":
-                                MouseUtils.move_and_click_point(locations[0][0], locations[0][1], "play_round_button")
-                            elif difficulty == "Hard":
-                                MouseUtils.move_and_click_point(locations[1][0], locations[1][1], "play_round_button")
-                            elif difficulty == "Very Hard":
-                                MouseUtils.move_and_click_point(locations[2][0], locations[2][1], "play_round_button")
+                                if difficulty == "Normal":
+                                    MouseUtils.move_and_click_point(locations[0][0], locations[0][1], "play_round_button")
+                                elif difficulty == "Hard":
+                                    MouseUtils.move_and_click_point(locations[1][0], locations[1][1], "play_round_button")
+                                elif difficulty == "Very Hard":
+                                    MouseUtils.move_and_click_point(locations[2][0], locations[2][1], "play_round_button")
 
                         break
                     else:
@@ -321,8 +461,20 @@ class Special:
         """
         from bot.game import Game
 
+        # A stocked Dimension Halo is now rendered as a regular card on the
+        # Special Quest page instead of the old Limited-Time Quests popup.
+        # If the user deliberately starts there, clear it first and then
+        # continue with the configured VH Angel Halo run in the same cycle.
+        ran_open_dimension_halo = False
+        if first_run and Settings.enable_nightmare and \
+                Settings.mission_name == "VH Angel Halo" and \
+                Settings.item_name == "Angel Halo Weapons" and \
+                Special._is_special_page() and \
+                Special._special_card_exists("Dimension Halo"):
+            ran_open_dimension_halo = Special.check_for_dimensional_halo()
+
         # Start the navigation process.
-        if first_run:
+        if first_run or ran_open_dimension_halo:
             Special._navigate()
         elif Game.find_and_click_button("play_again"):
             if Game.check_for_popups():

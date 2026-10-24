@@ -145,26 +145,18 @@ class Game:
             ImageUtils.find_button("home", test_mode = True)
             return
 
-        if not ImageUtils.confirm_location("home", bypass_general_adjustment = True):
-            MessageLog.print_message("\n[INFO] Moving back to the Home screen...")
-
-            if Game.find_and_click_button("home", bypass_general_adjustment = True) is False:
-                raise Exception(
-                    "HOME button is not found. Stopping bot to prevent cascade of errors. Please readjust your confidences/scales. Maybe the Home button located on the bottom bar is not visible?")
-
-            # Handle any misc popups on the Home screen.
-            Game.find_and_click_button("close", suppress_error = True)
-
-            if confirm_location_check:
-                Game.wait(3.5)
-
-                if ImageUtils.confirm_location("home", bypass_general_adjustment = True) is False:
-                    Game.find_and_click_button("reload")
-                    Game.wait(5.0)
-                    if ImageUtils.confirm_location("home", bypass_general_adjustment = True) is False:
-                        raise Exception("Failed to head back to the Home screen after clicking on the Home button.")
-        else:
+        if Game._is_home_state():
             MessageLog.print_message("[INFO] Bot is at the Home screen.")
+        else:
+            MessageLog.print_message("\n[INFO] Moving back to the Home screen...")
+            if not Game._recover_to_home(max_attempts = 2):
+                raise RuntimeError(
+                    "Failed to recover to the Home screen after DOM navigation, Home-button "
+                    "navigation, and reload attempts."
+                )
+
+            if confirm_location_check and not Game._is_home_state():
+                raise RuntimeError("Recovery reported success but the Home screen could not be verified.")
 
         # Recalibrate the dimensions of the bot window.
         if display_info_check:
@@ -1256,6 +1248,89 @@ class Game:
             MessageLog.print_message("[INFO] EP auto-restore check passed. Continuing to Party Selection...")
 
         return None
+
+    @staticmethod
+    def _is_home_state() -> bool:
+        """Confirm Home through the browser route before image matching."""
+        route_is_home = Game.evaluate_dom_js("""(() => {
+            const hash = window.location.hash || '';
+            return hash === '' || hash.startsWith('#mypage');
+        })()""")
+        if route_is_home:
+            return True
+
+        return bool(ImageUtils.confirm_location(
+            "home", tries = 1, suppress_error = True,
+            bypass_general_adjustment = True
+        ))
+
+    @staticmethod
+    def _recover_to_home(max_attempts: int = 2) -> bool:
+        """Recover an unknown/wipe state to Home using bounded, verified steps."""
+        attempts = max(1, max_attempts)
+
+        for attempt in range(1, attempts + 1):
+            if Game._is_home_state():
+                return True
+
+            dom_navigation = Game.evaluate_dom_js("""(() => {
+                try {
+                    if (window.Game && window.Game.view &&
+                            typeof window.Game.view.popRemoveOnly === 'function') {
+                        window.Game.view.popRemoveOnly();
+                    }
+                } catch (_) {}
+
+                const visible = el => Boolean(el && el.offsetParent !== null &&
+                    window.getComputedStyle(el).display !== 'none' &&
+                    window.getComputedStyle(el).visibility !== 'hidden');
+                const safeControl = Array.from(document.querySelectorAll(
+                    '.btn-usual-cancel, .btn-cancel, .btn-usual-close, .btn-close, .btn-popup-close'
+                )).find(visible);
+                if (safeControl) {
+                    try {
+                        if (window.$ && typeof window.$(safeControl).trigger === 'function') {
+                            window.$(safeControl).trigger('tap');
+                        } else {
+                            safeControl.click();
+                        }
+                    } catch (_) {}
+                }
+
+                window.location.hash = '#mypage';
+                return true;
+            })()""")
+            if dom_navigation:
+                MessageLog.print_message(
+                    f"[RECOVERY] Requested Home through DOM (attempt {attempt}/{attempts})."
+                )
+                Game.wait(2.0)
+                if Game._is_home_state():
+                    MessageLog.print_message("[RECOVERY] Home confirmed through browser route.")
+                    return True
+
+            home_clicked = Game.find_and_click_button(
+                "home", tries = 2, suppress_error = True,
+                bypass_general_adjustment = True
+            )
+            if home_clicked:
+                MessageLog.print_message(
+                    f"[RECOVERY] Clicked the visible Home control (attempt {attempt}/{attempts})."
+                )
+                Game.wait(3.0)
+                Game.find_and_click_button("close", tries = 1, suppress_error = True)
+                if Game._is_home_state():
+                    MessageLog.print_message("[RECOVERY] Home confirmed after visible navigation.")
+                    return True
+
+            if attempt < attempts:
+                MessageLog.print_message(
+                    f"[RECOVERY] Home is still unconfirmed after attempt {attempt}; reloading before retry."
+                )
+                Game.find_and_click_button("reload", tries = 1, suppress_error = True)
+                Game.wait(4.0)
+
+        return Game._is_home_state()
 
     @staticmethod
     def dismiss_post_battle_progression(max_attempts: int = 3) -> bool:
